@@ -181,7 +181,9 @@ server.on('listening', () => {
 	console.log(table(tableData, tableConfig));
 });
 
+// SSSL_BIND_ADDRESS: bind one interface (a host with systemd-resolved on 127.0.0.53 cannot take 0.0.0.0:53).
+const bindAddress = process.env.SSSL_BIND_ADDRESS || '0.0.0.0';
 server.listen({
-	udp: udpPort !== 0 ? udpPort : undefined,
-	tcp: tcpPort !== 0 ? tcpPort : undefined
+	udp: udpPort !== 0 ? { port: udpPort, address: bindAddress, type: 'udp4' } : undefined,
+	tcp: tcpPort !== 0 ? { port: tcpPort, address: bindAddress } : undefined
 });
