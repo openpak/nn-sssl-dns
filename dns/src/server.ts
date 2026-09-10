@@ -184,6 +184,6 @@ server.on('listening', () => {
 // SSSL_BIND_ADDRESS: bind one interface (a host with systemd-resolved on 127.0.0.53 cannot take 0.0.0.0:53).
 const bindAddress = process.env.SSSL_BIND_ADDRESS || '0.0.0.0';
 server.listen({
-	udp: udpPort !== 0 ? { port: udpPort, address: bindAddress, type: 'udp4' } : undefined,
+	udp: udpPort !== 0 ? { port: udpPort, address: bindAddress } : undefined,
 	tcp: tcpPort !== 0 ? { port: tcpPort, address: bindAddress } : undefined
-});
+} as never); // dns2 accepts { port, address } at runtime; its typings only know a port
