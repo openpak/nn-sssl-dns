@@ -1,4 +1,4 @@
-import { createServer, Packet } from 'dns2';
+import DNS, { createServer, Packet } from 'dns2';
 import { table } from 'table';
 import colors from '@colors/colors';
 import dotenv from 'dotenv';
@@ -77,28 +77,64 @@ if (tcpPort === 0) {
 	console.log(colors.bgYellow('TCP port not set. One will be randomly assigned'));
 }
 
+// OpenPak: a console points its only DNS server here, so this has to be a complete
+// resolver. Nintendo's names and OpenPak's console names go to the OpenPak box (explicit
+// mappings win); everything else is forwarded upstream.
+const OURS = ['.nintendo.net', '.nintendowifi.net', '.nintendo.com', '.openpak.org', '.gamespy.com'];
+const DEFAULT_ADDRESS = process.env.SSSL_DNS_DEFAULT_ADDRESS;
+const upstream = new DNS({ nameServers: [ process.env.SSSL_DNS_UPSTREAM || '1.1.1.1' ] });
+
+function ours(name: string): string | undefined {
+	if (addressMap[name]) {
+		return addressMap[name];
+	}
+	const lower = name.toLowerCase();
+	if (DEFAULT_ADDRESS && OURS.some(suffix => lower.endsWith(suffix))) {
+		return DEFAULT_ADDRESS;
+	}
+	return undefined;
+}
+
 const server = createServer({
 	udp: true,
 	tcp: true,
-	handle: (request, send) => {
+	handle: async (request, send) => {
 		const [ question ] = request.questions;
 		const { name } = question;
-
-		if (addressMap[name]) {
-			const response = Packet.createResponseFromRequest(request);
-
-			response.answers.push({
-				name,
-				type: Packet.TYPE.A,
-				class: Packet.CLASS.IN,
-				ttl: 300,
-				address: addressMap[name]
-			});
-
+		const qtype = (question as { type?: number }).type ?? Packet.TYPE.A;
+		const response = Packet.createResponseFromRequest(request);
+		const address = ours(name);
+		if (address) {
+			if (qtype === Packet.TYPE.A) {
+				response.answers.push({
+					name,
+					type: Packet.TYPE.A,
+					class: Packet.CLASS.IN,
+					ttl: 300,
+					address
+				});
+			}
 			send(response);
+			return;
 		}
+		try {
+			const answer = await upstream.resolve(name, typeName(qtype) as never);
+			response.answers = answer.answers;
+		} catch {
+			// no answer is what a dead upstream gives too
+		}
+		send(response);
 	}
 });
+
+function typeName(type: number): string {
+	for (const [ key, value ] of Object.entries(Packet.TYPE)) {
+		if (value === type) {
+			return key;
+		}
+	}
+	return 'A';
+}
 
 server.on('listening', () => {
 	const tableConfig = {
