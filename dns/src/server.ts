@@ -95,14 +95,55 @@ function ours(name: string): string | undefined {
 	return undefined;
 }
 
+// OpenPak: this resolver is reachable from the internet, because a console's DNS setting is
+// the only one it has. That makes it an amplification target, so: a token bucket per client
+// address, and ANY queries are refused outright (they are the classic amplification vector and
+// no console sends them). Buckets are swept so a scan cannot grow the map without bound.
+const RATE_PER_SECOND = Number(process.env.SSSL_DNS_RATE || 15);
+const RATE_BURST = Number(process.env.SSSL_DNS_BURST || 45);
+type Bucket = { tokens: number; last: number };
+const buckets = new Map<string, Bucket>();
+
+function allowed(client: string): boolean {
+	const now = Date.now();
+	const bucket = buckets.get(client) ?? { tokens: RATE_BURST, last: now };
+	bucket.tokens = Math.min(RATE_BURST, bucket.tokens + ((now - bucket.last) / 1000) * RATE_PER_SECOND);
+	bucket.last = now;
+	if (bucket.tokens < 1) {
+		buckets.set(client, bucket);
+		return false;
+	}
+	bucket.tokens -= 1;
+	buckets.set(client, bucket);
+	return true;
+}
+
+setInterval(() => {
+	const cutoff = Date.now() - 60_000;
+	for (const [ client, bucket ] of buckets) {
+		if (bucket.last < cutoff) {
+			buckets.delete(client);
+		}
+	}
+}, 60_000).unref();
+
 const server = createServer({
 	udp: true,
 	tcp: true,
-	handle: async (request, send) => {
+	handle: async (request, send, rinfo) => {
 		const [ question ] = request.questions;
 		const { name } = question;
 		const qtype = (question as { type?: number }).type ?? Packet.TYPE.A;
 		const response = Packet.createResponseFromRequest(request);
+
+		// 255 is ANY: refused, never forwarded.
+		if (qtype === 255) {
+			return;
+		}
+		const client = (rinfo as { address?: string } | undefined)?.address;
+		if (client && !allowed(client)) {
+			return; // silently dropped: an answer is itself the amplification
+		}
 		const address = ours(name);
 		if (address) {
 			if (qtype === Packet.TYPE.A) {
