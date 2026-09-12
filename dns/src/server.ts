@@ -77,10 +77,69 @@ if (tcpPort === 0) {
 	console.log(colors.bgYellow('TCP port not set. One will be randomly assigned'));
 }
 
-// OpenPak: a console points its only DNS server here, so this has to be a complete
-// resolver. Nintendo's names and OpenPak's console names go to the OpenPak box (explicit
-// mappings win); everything else is forwarded upstream.
-const OURS = ['.nintendo.net', '.nintendowifi.net', '.nintendo.com', '.openpak.org', '.gamespy.com'];
+// OpenPak (NP-4): the families this resolver answers are the same list the
+// emulators read — GET /api/v1/network/profile on the website, fetched on
+// boot and re-fetched on the profile's own recheck_after hint. Until the
+// first fetch lands, and again whenever the website stops answering, the
+// compiled-in list below is the truth (stale beats broken: a console must
+// never lose its name server because a profile fetch failed).
+const OURS_FALLBACK = ['.nintendo.net', '.nintendowifi.net', '.nintendo.com', '.openpak.org', '.gamespy.com'];
+let oursSuffixes = OURS_FALLBACK;
+let oursExact: string[] = [];
+let recheckAfter = 6 * 3600; // seconds; replaced by the profile's own hint
+const NETPROFILE_URL = process.env.NETPROFILE_URL || 'http://127.0.0.1:20010/api/v1/network/profile';
+
+// A console whose only network setting is a DNS server has nowhere else to
+// go, so this resolver answers every name the profile names — including ones
+// the profile lists under redirect.never. That list exists for clients with
+// a working resolution path of their own (emulators): a connection test
+// pointed at OpenPak measures OpenPak. Here the alternative to answering
+// conntest is forwarding it to a corpse, and the console has no second
+// resolver to fall back to. OpenPak's answer IS the service.
+interface NetworkProfile {
+	version?: number;
+	server?: { address?: string };
+	redirect?: { suffixes?: unknown; exact?: unknown };
+	recheck_after?: number;
+}
+
+async function fetchProfile(): Promise<void> {
+	const res = await fetch(NETPROFILE_URL, { signal: AbortSignal.timeout(2000) });
+	if (!res.ok) {
+		throw new Error(`profile fetch answered ${res.status}`);
+	}
+	const profile = await res.json() as NetworkProfile;
+	const suffixes = profile.redirect?.suffixes;
+	const exact = profile.redirect?.exact;
+	// Reject the whole profile rather than apply part of it: a malformed
+	// answer is a fallback, never a half-applied resolver.
+	if (!Array.isArray(suffixes) || !suffixes.every(s => typeof s === 'string' && s.startsWith('.')) ||
+		!Array.isArray(exact) || !exact.every(s => typeof s === 'string')) {
+		throw new Error('profile carries malformed redirect lists');
+	}
+	oursSuffixes = suffixes as string[];
+	oursExact = exact as string[];
+	if (typeof profile.recheck_after === 'number' && profile.recheck_after > 0) {
+		recheckAfter = profile.recheck_after;
+	}
+	console.log(colors.green(`network profile applied: version ${profile.version ?? '?'}, ${oursSuffixes.length} families, ${oursExact.length} exact names, recheck ${recheckAfter}s`));
+}
+
+// One fetch at boot (fallback covers failure), then the profile's own hint.
+// A list that changes a few times a month does not want a push channel; a
+// missed refresh only means the console keeps yesterday's correct answer.
+async function profileLoop(): Promise<void> {
+	try {
+		await fetchProfile();
+	} catch (err) {
+		console.log(colors.yellow(`network profile unavailable; keeping the compiled-in list (${String(err)})`));
+	}
+	const tick = (): void => {
+		fetchProfile().catch(() => { /* the last good list is already serving */ });
+	};
+	setInterval(tick, Math.max(recheckAfter, 60) * 1000).unref();
+}
+
 const DEFAULT_ADDRESS = process.env.SSSL_DNS_DEFAULT_ADDRESS;
 const upstream = new DNS({ nameServers: [ process.env.SSSL_DNS_UPSTREAM || '1.1.1.1' ] });
 
@@ -89,7 +148,10 @@ function ours(name: string): string | undefined {
 		return addressMap[name];
 	}
 	const lower = name.toLowerCase();
-	if (DEFAULT_ADDRESS && OURS.some(suffix => lower.endsWith(suffix))) {
+	if (!DEFAULT_ADDRESS) {
+		return undefined;
+	}
+	if (oursSuffixes.some(suffix => lower.endsWith(suffix)) || oursExact.includes(lower)) {
 		return DEFAULT_ADDRESS;
 	}
 	return undefined;
@@ -228,3 +290,5 @@ server.listen({
 	udp: udpPort !== 0 ? { port: udpPort, address: bindAddress } : undefined,
 	tcp: tcpPort !== 0 ? { port: tcpPort, address: bindAddress } : undefined
 } as never); // dns2 accepts { port, address } at runtime; its typings only know a port
+
+void profileLoop();
