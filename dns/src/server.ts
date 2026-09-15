@@ -83,7 +83,7 @@ if (tcpPort === 0) {
 // first fetch lands, and again whenever the website stops answering, the
 // compiled-in list below is the truth (stale beats broken: a console must
 // never lose its name server because a profile fetch failed).
-const OURS_FALLBACK = ['.nintendo.net', '.nintendowifi.net', '.nintendo.com', '.openpak.org', '.gamespy.com'];
+const OURS_FALLBACK = ['.nintendo.net', '.nintendowifi.net', '.nintendo.com', '.openpak.org', '.gamespy.com', '.battle.net'];
 let oursSuffixes = OURS_FALLBACK;
 let oursExact: string[] = [];
 let recheckAfter = 6 * 3600; // seconds; replaced by the profile's own hint
