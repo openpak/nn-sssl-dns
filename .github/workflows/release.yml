@@ -3,7 +3,7 @@ name: release
 # terminated by OpenPak's Traefik, so upstream's nginx half is not built).
 on:
   push:
-    tags: ['v*']
+    tags: ['v*.*.*']
   workflow_dispatch:
 permissions:
   contents: read
