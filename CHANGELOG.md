@@ -3,6 +3,15 @@
 Generated from git history on 2026-09-15. `git log` stays the source
 of truth; this file is the readable summary.
 
+## v0.4.0 — 2026-09-24
+
+- **Signed redirect ceiling.** Profile names are answered only inside the Ed25519-signed ceiling
+  from `https://openpak.org/api/v1/network/ceiling` (verified against pinned keys, rollback
+  refused, cached in `SSSL_DNS_STATE_DIR`). Until that endpoint answers, the compiled family
+  list is the ceiling, as before.
+- Dependencies: typescript-eslint 8, eslint 8.57, TypeScript 5.9; npm audit clean.
+- The image builds on OpenPak's self-hosted runner with podman; the repo is private.
+
 ## v0.2.0 — 2026-09-11
 
 
