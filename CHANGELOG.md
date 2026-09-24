@@ -3,6 +3,10 @@
 Generated from git history on 2026-09-15. `git log` stays the source
 of truth; this file is the readable summary.
 
+## Unreleased
+
+- ci: build scratch in the runner temp, not the checkout [1fba45c]; docs commits
+
 ## v0.4.0 — 2026-09-24
 
 - **Signed redirect ceiling.** Profile names are answered only inside the Ed25519-signed ceiling
@@ -11,22 +15,33 @@ of truth; this file is the readable summary.
   list is the ceiling, as before.
 - Dependencies: typescript-eslint 8, eslint 8.57, TypeScript 5.9; npm audit clean.
 - The image builds on OpenPak's self-hosted runner with podman; the repo is private.
+- `.battle.net` added to the compiled fallback families [4af27ac]; README links the NP PRD
+  in the website repo; CI builds only on `v*.*.*` tags [1fbc8d8].
+
+## v0.3.0 — 2026-09-12
+
+- NP-4: read the same map the emulators read — the website's network profile
+  (`NETPROFILE_URL`) decides the answered families and names; the compiled suffix list is
+  fallback only [95728a4]
+- Drop upstream's two image workflows: release.yml builds the image OpenPak deploys [dccfabd]
 
 ## v0.2.0 — 2026-09-11
 
-
+- Rate limit and refuse ANY: this resolver is reachable from the internet [2025b3f]
 
 ## v0.1.3 — 2026-09-10
 
-
+- listen options cast: dns2 takes `{ port, address }` at runtime [80dc9c0]
 
 ## v0.1.2 — 2026-09-10
 
-
+- `SSSL_BIND_ADDRESS`: bind one interface, for hosts where systemd-resolved owns
+  127.0.0.53:53 [b5a6400]
 
 ## v0.1.1 — 2026-09-10
 
-
+- A whole resolver, not a map: Nintendo and openpak.org names answer with the OpenPak box,
+  everything else is forwarded upstream [37a6383]
 
 ## v0.1.0 — 2026-09-10
 
