@@ -20,11 +20,12 @@
 	},
 	"devDependencies": {
 		"@types/dns2": "^2.0.8",
-		"@types/node": "^20.11.10",
-		"@typescript-eslint/eslint-plugin": "^6.20.0",
-		"@typescript-eslint/parser": "^6.20.0",
-		"eslint": "^8.56.0",
+		"@types/node": "^20.19.43",
+		"@typescript-eslint/eslint-plugin": "^8.70.1",
+		"@typescript-eslint/parser": "^8.70.1",
+		"eslint": "^8.57.1",
 		"rimraf": "^5.0.5",
-		"tsc-alias": "^1.8.8"
+		"tsc-alias": "^1.8.8",
+		"typescript": "~5.9"
 	}
 }
