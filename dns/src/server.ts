@@ -2,6 +2,9 @@ import DNS, { createServer, Packet } from 'dns2';
 import { table } from 'table';
 import colors from '@colors/colors';
 import dotenv from 'dotenv';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { Ceiling, CeilingStore, familiesFor, fetchCeilingBytes, filterProfile } from './ceiling';
 
 process.on('SIGTERM', () => {
 	process.exit();
@@ -81,13 +84,74 @@ if (tcpPort === 0) {
 // emulators read — GET /api/v1/network/profile on the website, fetched on
 // boot and re-fetched on the profile's own recheck_after hint. Until the
 // first fetch lands, and again whenever the website stops answering, the
-// compiled-in list below is the truth (stale beats broken: a console must
-// never lose its name server because a profile fetch failed).
+// last applied list keeps serving (stale beats broken: a console must never
+// lose its name server because a profile fetch failed).
+//
+// Signed ceiling (docs/signed-ceiling.md): every profile name must lie inside
+// the Ed25519-signed ceiling fetched from openpak.org; names outside it are
+// dropped one by one and logged, never the whole profile. The compiled list
+// below is only the first-boot fallback ceiling, used while no verified
+// ceiling has ever been cached. It is never updated again.
 const OURS_FALLBACK = ['.nintendo.net', '.nintendowifi.net', '.nintendo.com', '.openpak.org', '.gamespy.com', '.battle.net'];
 let oursSuffixes = OURS_FALLBACK;
 let oursExact: string[] = [];
 let recheckAfter = 6 * 3600; // seconds; replaced by the profile's own hint
 const NETPROFILE_URL = process.env.NETPROFILE_URL || 'http://127.0.0.1:20010/api/v1/network/profile';
+const ceilingStore = new CeilingStore(process.env.SSSL_DNS_STATE_DIR || join(homedir(), '.openpak-sssl-dns'));
+let lastProfile: { suffixes: unknown[]; exact: unknown[] } | undefined;
+let lastCeilingError = '';
+
+function ceilingFamilies(): string[] {
+	return ceilingStore.current ? familiesFor(ceilingStore.current) : OURS_FALLBACK;
+}
+
+function logCeilingError(reason: string): void {
+	// Once per distinct reason: a six-hourly tick must not repeat itself.
+	if (reason !== lastCeilingError) {
+		lastCeilingError = reason;
+		console.log(colors.yellow(`signed ceiling rejected (${reason}); keeping ${ceilingStore.current ? `v${ceilingStore.current.version}` : 'the compiled-in fallback'}`));
+	}
+}
+
+function loadCachedCeiling(): void {
+	try {
+		const ceiling = ceilingStore.loadCached();
+		console.log(colors.green(`cached ceiling v${ceiling.version} loaded: ${familiesFor(ceiling).length} families`));
+	} catch (err) {
+		console.log(colors.yellow(`${err instanceof Error ? err.message : String(err)}; ceiling is the compiled-in fallback until a signed one verifies`));
+	}
+}
+
+async function refreshCeiling(): Promise<void> {
+	const before = ceilingFamilies().join(' ');
+	const previous = ceilingStore.current?.version;
+	let ceiling: Ceiling;
+	try {
+		ceiling = ceilingStore.accept(await fetchCeilingBytes());
+	} catch (err) {
+		logCeilingError(err instanceof Error ? err.message : String(err));
+		return;
+	}
+	lastCeilingError = '';
+	const after = ceilingFamilies().join(' ');
+	if (previous !== ceiling.version || before !== after) {
+		console.log(colors.green(`ceiling v${ceiling.version} accepted: ${familiesFor(ceiling).length} families`));
+		if (before !== after) {
+			console.log(colors.green(`ceiling families changed: ${after}`));
+		}
+	}
+}
+
+function applyProfile(): void {
+	// No profile yet: the compiled list serves, still clipped to the ceiling.
+	const profile = lastProfile ?? { suffixes: OURS_FALLBACK, exact: [] };
+	const filtered = filterProfile(profile.suffixes, profile.exact, ceilingFamilies());
+	for (const name of filtered.dropped) {
+		console.log(colors.yellow(`profile name outside the signed ceiling dropped: ${name}`));
+	}
+	oursSuffixes = filtered.suffixes;
+	oursExact = filtered.exact;
+}
 
 // A console whose only network setting is a DNS server has nowhere else to
 // go, so this resolver answers every name the profile names — including ones
@@ -111,31 +175,43 @@ async function fetchProfile(): Promise<void> {
 	const profile = await res.json() as NetworkProfile;
 	const suffixes = profile.redirect?.suffixes;
 	const exact = profile.redirect?.exact;
-	// Reject the whole profile rather than apply part of it: a malformed
-	// answer is a fallback, never a half-applied resolver.
-	if (!Array.isArray(suffixes) || !suffixes.every(s => typeof s === 'string' && s.startsWith('.')) ||
-		!Array.isArray(exact) || !exact.every(s => typeof s === 'string')) {
-		throw new Error('profile carries malformed redirect lists');
+	// A profile without its lists is no profile; a bad entry inside them is
+	// only that entry, dropped by the ceiling filter.
+	if (!Array.isArray(suffixes) || !Array.isArray(exact)) {
+		throw new Error('profile carries no redirect lists');
 	}
-	oursSuffixes = suffixes as string[];
-	oursExact = exact as string[];
+	lastProfile = { suffixes, exact };
+	applyProfile();
 	if (typeof profile.recheck_after === 'number' && profile.recheck_after > 0) {
 		recheckAfter = profile.recheck_after;
 	}
 	console.log(colors.green(`network profile applied: version ${profile.version ?? '?'}, ${oursSuffixes.length} families, ${oursExact.length} exact names, recheck ${recheckAfter}s`));
 }
 
-// One fetch at boot (fallback covers failure), then the profile's own hint.
-// A list that changes a few times a month does not want a push channel; a
-// missed refresh only means the console keeps yesterday's correct answer.
-async function profileLoop(): Promise<void> {
+// Ceiling, then profile: once at boot (fallbacks cover failure), then on the
+// profile's own hint. A list that changes a few times a month does not want a
+// push channel; a missed refresh only means the console keeps yesterday's
+// correct answer.
+async function refresh(): Promise<void> {
+	await refreshCeiling();
 	try {
 		await fetchProfile();
 	} catch (err) {
-		console.log(colors.yellow(`network profile unavailable; keeping the compiled-in list (${String(err)})`));
+		// The ceiling may still have narrowed: re-filter what is serving.
+		applyProfile();
+		throw err;
+	}
+}
+
+async function profileLoop(): Promise<void> {
+	loadCachedCeiling();
+	try {
+		await refresh();
+	} catch (err) {
+		console.log(colors.yellow(`network profile unavailable; keeping the last applied list (${String(err)})`));
 	}
 	const tick = (): void => {
-		fetchProfile().catch(() => { /* the last good list is already serving */ });
+		refresh().catch(() => { /* the last good list is already serving */ });
 	};
 	setInterval(tick, Math.max(recheckAfter, 60) * 1000).unref();
 }
