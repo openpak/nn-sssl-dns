@@ -13,7 +13,7 @@ jobs:
     # The light self-hosted runner (no heavy label needed): podman + qemu binfmt, as the website.
     runs-on: [self-hosted, linux, podman]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Scratch in the runner's temp, not the machine's shared /tmp
         run: |
           mkdir -p "$RUNNER_TEMP/scratch"
