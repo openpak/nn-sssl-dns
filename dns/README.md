@@ -15,7 +15,7 @@ The only 2 addresses required are for `conntest.nintendowifi.net` and `account.n
 | `NETPROFILE_URL`           | OpenPak network profile to answer (default: the website on this box).                  | No.                                    |
 | `SSSL_DNS_STATE_DIR`       | Where the signed ceiling and its highest accepted version persist (default `~/.openpak-sssl-dns`). | No.                     |
 
-Profile names are answered only if they lie inside the Ed25519-signed ceiling fetched from `https://openpak.org/api/v1/network/ceiling` (union of the `switch`, `wiiu`, `3ds`, `wii` and `ds` families); names outside it are dropped one by one and logged. See [signed-ceiling.md](../docs/signed-ceiling.md).
+Profile names are answered only if they lie inside the Ed25519-signed ceiling fetched from `https://openpak.org/api/v1/network/ceiling` (union of the `switch`, `wiiu`, `3ds`, `wii` and `ds` families); names outside it are dropped one by one and logged. See [signed-ceiling.md](https://github.com/openpak/docs/blob/main/signed-ceiling.md).
 
 These environment variables can be set manually or loaded from a `.env` file. See [example.env](./example.env) for an example configuration.
 
