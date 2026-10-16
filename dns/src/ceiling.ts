@@ -44,8 +44,9 @@ export const PINNED_KEYS: PinnedKey[] = [
 export const CEILING_URL = 'https://openpak.org/api/v1/network/ceiling';
 
 // The platforms whose real consoles use this resolver. It answers the union
-// profile, so its ceiling is the union of these platforms' families.
-export const SERVED_PLATFORMS = ['switch', 'wiiu', '3ds', 'wii', 'ds'];
+// profile, so its ceiling is the union of these platforms' families. ps3 covers
+// real PS3s and Pier, whose emulated network hands the firmware this resolver.
+export const SERVED_PLATFORMS = ['switch', 'wiiu', '3ds', 'wii', 'ds', 'ps3'];
 
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 const LABEL = /^[a-z0-9_-]+$/;

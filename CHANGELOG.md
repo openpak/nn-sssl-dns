@@ -3,8 +3,10 @@
 Generated from git history on 2026-09-15. `git log` stays the source
 of truth; this file is the readable summary.
 
-## Unreleased
+## v0.5.0 — 2026-10-16
 
+- Answers the ps3 platform's families (.playstation.net/.org/.com,
+  .sonyentertainmentnetwork.com) for real PS3s and Pier, inside signed ceiling v11.
 - ci: build scratch in the runner temp, not the checkout [1fba45c]; docs commits
 
 ## v0.4.0 — 2026-09-24
