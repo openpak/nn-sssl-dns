@@ -1,10 +1,11 @@
-import DNS, { createServer, Packet } from 'dns2';
+import { createServer, Packet } from 'dns2';
 import { table } from 'table';
 import colors from '@colors/colors';
 import dotenv from 'dotenv';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Ceiling, CeilingStore, familiesFor, fetchCeilingBytes, filterProfile } from './ceiling';
+import { NegativeCache, RateLimiter, configFromEnv, createHandler, formatStats, newStats, preserveEdnsSize, udpUpstream } from './guard';
 
 process.on('SIGTERM', () => {
 	process.exit();
@@ -217,7 +218,6 @@ async function profileLoop(): Promise<void> {
 }
 
 const DEFAULT_ADDRESS = process.env.SSSL_DNS_DEFAULT_ADDRESS;
-const upstream = new DNS({ nameServers: [ process.env.SSSL_DNS_UPSTREAM || '1.1.1.1' ] });
 
 function ours(name: string): string | undefined {
 	if (addressMap[name]) {
@@ -234,86 +234,47 @@ function ours(name: string): string | undefined {
 }
 
 // OpenPak: this resolver is reachable from the internet, because a console's DNS setting is
-// the only one it has. That makes it an amplification target, so: a token bucket per client
-// address, and ANY queries are refused outright (they are the classic amplification vector and
-// no console sends them). Buckets are swept so a scan cannot grow the map without bound.
-const RATE_PER_SECOND = Number(process.env.SSSL_DNS_RATE || 15);
-const RATE_BURST = Number(process.env.SSSL_DNS_BURST || 45);
-type Bucket = { tokens: number; last: number };
-const buckets = new Map<string, Bucket>();
+// the only one it has. Rate limiting, refused types, the UDP size clamp and the negative cache
+// live in guard.ts; settings in dns/README.md.
+const guardConfig = configFromEnv(process.env);
+preserveEdnsSize(Packet as never);
+const limiter = new RateLimiter(guardConfig);
+const stats = newStats();
+const handle = createHandler({
+	Packet: Packet as never,
+	config: guardConfig,
+	ours,
+	upstream: udpUpstream(Packet as never, process.env.SSSL_DNS_UPSTREAM || '1.1.1.1', 53, guardConfig.upstreamTimeoutMs),
+	limiter,
+	negative: new NegativeCache(guardConfig.negativeTtl),
+	stats
+});
 
-function allowed(client: string): boolean {
-	const now = Date.now();
-	const bucket = buckets.get(client) ?? { tokens: RATE_BURST, last: now };
-	bucket.tokens = Math.min(RATE_BURST, bucket.tokens + ((now - bucket.last) / 1000) * RATE_PER_SECOND);
-	bucket.last = now;
-	if (bucket.tokens < 1) {
-		buckets.set(client, bucket);
-		return false;
+setInterval(() => limiter.sweep(), 60_000).unref();
+
+// Aggregate counters only: no client address is ever logged.
+let lastStats = '';
+function logStats(): void {
+	const line = formatStats(stats);
+	if (line !== lastStats) {
+		lastStats = line;
+		console.log(`dns stats (since start): ${line}`);
 	}
-	bucket.tokens -= 1;
-	buckets.set(client, bucket);
-	return true;
 }
-
-setInterval(() => {
-	const cutoff = Date.now() - 60_000;
-	for (const [ client, bucket ] of buckets) {
-		if (bucket.last < cutoff) {
-			buckets.delete(client);
-		}
-	}
-}, 60_000).unref();
+if (guardConfig.statsInterval > 0) {
+	setInterval(logStats, guardConfig.statsInterval * 1000).unref();
+}
+process.on('SIGUSR2', logStats);
 
 const server = createServer({
 	udp: true,
 	tcp: true,
-	handle: async (request, send, rinfo) => {
-		const [ question ] = request.questions;
-		const { name } = question;
-		const qtype = (question as { type?: number }).type ?? Packet.TYPE.A;
-		const response = Packet.createResponseFromRequest(request);
-
-		// 255 is ANY: refused, never forwarded.
-		if (qtype === 255) {
-			return;
-		}
-		const client = (rinfo as { address?: string } | undefined)?.address;
-		if (client && !allowed(client)) {
-			return; // silently dropped: an answer is itself the amplification
-		}
-		const address = ours(name);
-		if (address) {
-			if (qtype === Packet.TYPE.A) {
-				response.answers.push({
-					name,
-					type: Packet.TYPE.A,
-					class: Packet.CLASS.IN,
-					ttl: 300,
-					address
-				});
-			}
-			send(response);
-			return;
-		}
-		try {
-			const answer = await upstream.resolve(name, typeName(qtype) as never);
-			response.answers = answer.answers;
-		} catch {
-			// no answer is what a dead upstream gives too
-		}
-		send(response);
+	handle: (request, send, rinfo) => {
+		handle(request, send, rinfo).catch(() => {
+			stats.malformed += 1;
+		});
 	}
 });
-
-function typeName(type: number): string {
-	for (const [ key, value ] of Object.entries(Packet.TYPE)) {
-		if (value === type) {
-			return key;
-		}
-	}
-	return 'A';
-}
 
 server.on('listening', () => {
 	const tableConfig = {

@@ -3,6 +3,15 @@
 Generated from git history on 2026-09-15. `git log` stays the source
 of truth; this file is the readable summary.
 
+## Unreleased
+
+- **Abuse limits for the public resolver** (`dns/src/guard.ts`, settings in `dns/README.md`):
+  per-prefix rate limiting (/24, /56) with BIND-style slip, `ANY` refused everywhere, TXT,
+  DNSSEC types, zone transfers and non-IN classes refused on recursion, UDP answers clamped to
+  1232 bytes (512 without EDNS) and stripped to the answer section, a 30 s negative cache,
+  an upstream timeout, aggregate counters only. Nintendo-name answers unchanged byte for byte.
+  A packet without a question no longer crashes the process.
+
 ## v0.5.0 — 2026-10-16
 
 - Answers the ps3 platform's families (.playstation.net/.org/.com,
