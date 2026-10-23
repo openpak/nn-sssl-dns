@@ -54,7 +54,7 @@ Rules:
   advertise 1232 bytes when the client used EDNS. Each query type is forwarded as itself (types dns2
   cannot name used to be forwarded as `A`); answer records dns2 cannot re-encode are left out.
 
-Profile names are answered only if they lie inside the Ed25519-signed ceiling fetched from `https://openpak.org/api/v1/network/ceiling` (union of the `switch`, `wiiu`, `3ds`, `wii` and `ds` families); names outside it are dropped one by one and logged. See [signed-ceiling.md](https://github.com/openpak/docs/blob/main/signed-ceiling.md).
+Profile names are answered only if they lie inside the Ed25519-signed ceiling fetched from `https://openpak.org/api/v1/network/ceiling` (union of the `switch`, `wiiu`, `3ds`, `wii` and `ds` families); names outside it are dropped one by one and logged. See [signed-ceiling.md](https://docs.openpak.org/contributors/signed-ceiling/).
 
 These environment variables can be set manually or loaded from a `.env` file. See [example.env](./example.env) for an example configuration.
 
