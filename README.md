@@ -6,7 +6,7 @@ whose only knob is a DNS server setting (unmodded Wii U with an SSSL certificate
 reaches OpenPak. TLS is terminated by OpenPak's Traefik, not by the nginx half. Image:
 `ghcr.io/openpak/nn-sssl-dns` on tag; settings in `dns/example.env`.
 
-Since NP-4 ([PRD `website/prds/network-profile-service-prd.md`](../website/prds/network-profile-service-prd.md)) the family list is not a second source of
+Since NP-4 ([PRD `website/prds/network-profile-service-prd.md`](../../../../openpak/website/prds/network-profile-service-prd.md)) the family list is not a second source of
 truth: on boot, and again on the profile's `recheck_after` hint, the resolver fetches
 `NETPROFILE_URL` (default: the website on this box, `/api/v1/network/profile`) and answers
 exactly the families and exact names the profile names. The compiled-in list covers the
