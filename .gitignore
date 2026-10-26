@@ -133,3 +133,4 @@ dist
 nginx/nginx.conf
 nginx/*.pem
 nginx/*.key
+next-session.md
