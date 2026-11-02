@@ -1,3 +1,9 @@
+# Provenance
+
+Based on [Pretendo `SSSL-DNS`](https://github.com/PretendoNetwork/SSSL-DNS) (AGPL-3.0). License as upstream; see LICENSE. The upstream README follows verbatim.
+
+---
+
 # SSSL DNS
 
 This project contains a DNS server and a custom Nginx configuration intended to be used in conjunction with [SSSL](https://github.com/PretendoNetwork/SSSL).
