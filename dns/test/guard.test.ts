@@ -341,3 +341,23 @@ test('udpUpstream: parses the answer, times out and closes on silence', async ()
 		fake.close();
 	}
 });
+
+test('one log line per query: type, rcode, duration, never the name or the client address', async () => {
+	const cfg = config();
+	const lines: string[] = [];
+	const handle = createHandler({
+		Packet, config: cfg, ours, stats: newStats(),
+		upstream: async () => ({ rcode: 0, tc: false, answers: [] }),
+		limiter: new RateLimiter(cfg),
+		negative: new NegativeCache(cfg.negativeTtl, 100),
+		log: line => lines.push(line)
+	});
+	await handle(Packet.parse(query('conntest.nintendowifi.net', 1)), () => undefined, UDP);
+	await handle(Packet.parse(query('secret.example.org', 255)), () => undefined, UDP);
+	assert.equal(lines.length, 2);
+	assert.match(lines[0], /^dns query A -> NOERROR \d+ms$/);
+	assert.match(lines[1], /^dns query type255 -> REFUSED \d+ms$/);
+	for (const line of lines) {
+		assert.ok(!/nintendowifi|secret|example|198\.51\.100/.test(line), line);
+	}
+});

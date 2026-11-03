@@ -368,6 +368,8 @@ export interface HandlerDeps {
 	limiter: RateLimiter;
 	negative: NegativeCache;
 	stats: Stats;
+	// One line per query: type, rcode, duration. Never the name or the client address.
+	log?: (line: string) => void;
 }
 
 export type Send = (response: Pkt) => unknown;
@@ -382,7 +384,31 @@ function minimal(Packet: PacketLib, request: Pkt, rcode: number, tc = false): Pk
 	return response;
 }
 
+const RCODE_NAMES = Object.fromEntries(Object.entries(RCODE).map(([name, code]) => [ code, name ])) as Record<number, string>;
+
 export function createHandler(deps: HandlerDeps): (request: Pkt, send: Send, rinfo: unknown) => Promise<void> {
+	const run = createRunner(deps);
+	const { log } = deps;
+	if (!log) {
+		return run;
+	}
+	return async (request, send, rinfo) => {
+		const start = Date.now();
+		let outcome = 'dropped';
+		const type = request?.questions?.[0]?.type;
+		try {
+			await run(request, response => {
+				outcome = RCODE_NAMES[response?.header?.rcode ?? 0] ?? 'NOERROR';
+				return send(response);
+			}, rinfo);
+		} finally {
+			const typeName = type === TYPE_A ? 'A' : (typeof type === 'number' ? `type${type}` : 'none');
+			log(`dns query ${typeName} -> ${outcome} ${Date.now() - start}ms`);
+		}
+	};
+}
+
+function createRunner(deps: HandlerDeps): (request: Pkt, send: Send, rinfo: unknown) => Promise<void> {
 	const { Packet, config, ours, upstream, limiter, negative, stats } = deps;
 	return async (request, send, rinfo) => {
 		stats.queries += 1;

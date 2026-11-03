@@ -247,7 +247,8 @@ const handle = createHandler({
 	upstream: udpUpstream(Packet as never, process.env.SSSL_DNS_UPSTREAM || '1.1.1.1', 53, guardConfig.upstreamTimeoutMs),
 	limiter,
 	negative: new NegativeCache(guardConfig.negativeTtl),
-	stats
+	stats,
+	log: console.log
 });
 
 setInterval(() => limiter.sweep(), 60_000).unref();

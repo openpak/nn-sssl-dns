@@ -3,7 +3,11 @@
 Generated from git history on 2026-09-15. `git log` stays the source
 of truth; this file is the readable summary.
 
-## Unreleased
+## v0.5.1 — 2026-11-03
+
+- One log line per DNS query: `dns query <type> -> <rcode> <ms>ms`; never the name or the client
+  address. The nginx test page logs `http <method> <path> -> <status> <seconds>s` without the query.
+- Includes the abuse limits below, which were committed after v0.5.0.
 
 - **Abuse limits for the public resolver** (`dns/src/guard.ts`, settings in `dns/README.md`):
   per-prefix rate limiting (/24, /56) with BIND-style slip, `ANY` refused everywhere, TXT,
