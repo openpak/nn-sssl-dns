@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createSocket } from 'node:dgram';
 import dns2 from 'dns2';
 import {
-	NegativeCache, RCODE, RateLimiter, configFromEnv, createHandler, newStats, prefixKey, preserveEdnsSize, udpLimit, udpUpstream,
+	KnownSources, NegativeCache, RCODE, RateLimiter, configFromEnv, createHandler, newStats, prefixKey, preserveEdnsSize, udpLimit, udpUpstream,
 	type GuardConfig, type Pkt, type Upstream, type UpstreamAnswer
 } from '../src/guard.ts';
 
@@ -29,7 +29,7 @@ function config(over: Partial<GuardConfig> = {}): GuardConfig {
 }
 
 function setup(over: Partial<GuardConfig> = {}, upstream?: Upstream, now: () => number = Date.now) {
-	const cfg = config(over);
+	const cfg = config({ recursion: 'open', ...over });
 	const stats = newStats();
 	const calls: Array<[ string, number ]> = [];
 	const up: Upstream = upstream ?? (async (name, type) => {
@@ -39,7 +39,8 @@ function setup(over: Partial<GuardConfig> = {}, upstream?: Upstream, now: () => 
 	const handle = createHandler({
 		Packet, config: cfg, ours, upstream: up, stats,
 		limiter: new RateLimiter(cfg, now),
-		negative: new NegativeCache(cfg.negativeTtl, 100, now)
+		negative: new NegativeCache(cfg.negativeTtl, 100, now),
+		known: new KnownSources(cfg.knownTtl, cfg.knownMax, now)
 	});
 	async function ask(raw: Buffer, rinfo: unknown = UDP): Promise<Buffer | undefined> {
 		let sent: Buffer | undefined;
@@ -168,13 +169,13 @@ test('UDP answers fit 512 without EDNS, else TC=1 and empty', async () => {
 
 test('the client EDNS size is clamped to 1232 and we advertise 1232', async () => {
 	// 50 answers ~ 1.6 KB: over 1232 even though the client asked for 4096.
-	const big = setup({}, many(50));
+	const big = setup({ recursiveMaxUdp: 1232 }, many(50));
 	const out = await big.ask(query('big.example', 1, { edns: 4096 }));
 	const res = parse(out);
 	assert.equal(res.header.tc, 1);
 	assert.ok(out!.length <= 1232);
 	// 30 answers ~ 1 KB: fits 1232, not 512.
-	const mid = setup({}, many(30));
+	const mid = setup({ recursiveMaxUdp: 1232 }, many(30));
 	const midOut = await mid.ask(query('big.example', 1, { edns: 4096 }));
 	const midRes = parse(midOut);
 	assert.equal(midRes.header.tc, 0);
@@ -306,7 +307,7 @@ test('a packet with no question or a response is ignored, not a crash', async ()
 
 test('configFromEnv defaults and overrides', () => {
 	const d = configFromEnv({});
-	assert.deepEqual(d, { rate: 20, burst: 200, slip: 2, ipv4Prefix: 24, ipv6Prefix: 56, maxUdp: 1232, negativeTtl: 30, upstreamTimeoutMs: 2000, maxBuckets: 100000, statsInterval: 3600 });
+	assert.deepEqual(d, { rate: 20, burst: 200, slip: 2, ipv4Prefix: 24, ipv6Prefix: 56, maxUdp: 1232, negativeTtl: 30, upstreamTimeoutMs: 2000, maxBuckets: 100000, statsInterval: 3600, recursion: 'known', knownTtl: 172800, knownMax: 100000, recursiveMaxUdp: 1232 });
 	const o = configFromEnv({ SSSL_DNS_RATE: '5', SSSL_DNS_MAX_UDP: '9000', SSSL_DNS_SLIP: 'x' });
 	assert.equal(o.rate, 5);
 	assert.equal(o.maxUdp, 4096);
@@ -350,6 +351,7 @@ test('one log line per query: type, rcode, duration, never the name or the clien
 		upstream: async () => ({ rcode: 0, tc: false, answers: [] }),
 		limiter: new RateLimiter(cfg),
 		negative: new NegativeCache(cfg.negativeTtl, 100),
+		known: new KnownSources(cfg.knownTtl),
 		log: line => lines.push(line)
 	});
 	await handle(Packet.parse(query('conntest.nintendowifi.net', 1)), () => undefined, UDP);
@@ -360,4 +362,55 @@ test('one log line per query: type, rcode, duration, never the name or the clien
 	for (const line of lines) {
 		assert.ok(!/nintendowifi|secret|example|198\.51\.100/.test(line), line);
 	}
+});
+
+test('recursion is for known consoles only: unknown sources get REFUSED, no bigger than the query', async () => {
+	const { ask, calls, stats } = setup({ recursion: 'known' });
+	const q = query('example.com', 1);
+	const refused = parse((await ask(q))!);
+	assert.equal(refused.header.rcode, RCODE.REFUSED);
+	assert.equal(refused.answers.length, 0);
+	assert.ok((await ask(q))!.length <= q.length);
+	assert.equal(calls.length, 0);
+	assert.equal(stats.refusedUnknown, 2);
+	// an OpenPak name is answered for anyone, and registers the source
+	const a = parse((await ask(query('conntest.nintendowifi.net', 1)))!);
+	assert.equal(a.answers[0].address, OURS);
+	const ok = parse((await ask(q))!);
+	assert.equal(ok.header.rcode, RCODE.NOERROR);
+	assert.equal(ok.answers[0].address, '203.0.113.5');
+	assert.equal(calls.length, 1);
+	// another source stays refused; TCP counts per address too
+	assert.equal(parse((await ask(q, { address: '198.51.100.8', port: 1, family: 'IPv4' }))!).header.rcode, RCODE.REFUSED);
+	assert.equal(parse((await ask(q, TCP))!).header.rcode, RCODE.NOERROR);
+});
+
+test('recursion off refuses everything that is not OpenPak\'s; loopback always recurses', async () => {
+	const { ask } = setup({ recursion: 'off' });
+	await ask(query('conntest.nintendowifi.net', 1));
+	assert.equal(parse((await ask(query('example.com', 1)))!).header.rcode, RCODE.REFUSED);
+	const lo = setup({ recursion: 'known' });
+	assert.equal(parse((await lo.ask(query('example.com', 1), { address: '127.0.0.1', port: 1, family: 'IPv4' }))!).header.rcode, RCODE.NOERROR);
+});
+
+test('known sources expire and the table is bounded', () => {
+	let t = 0;
+	const k = new KnownSources(10, 2, () => t);
+	k.add('198.51.100.1');
+	assert.ok(k.has('198.51.100.1'));
+	assert.ok(!k.has('198.51.100.2'));
+	t = 11_000;
+	assert.ok(!k.has('198.51.100.1'));
+	k.add('198.51.100.1'); k.add('198.51.100.2'); k.add('198.51.100.3');
+	assert.equal(k.size, 2);
+	assert.ok(!k.has('198.51.100.1'));
+	assert.ok(k.has('::1'));
+});
+
+test('SSSL_DNS_RECURSIVE_MAX_UDP caps recursed UDP answers below the EDNS clamp', async () => {
+	const many = Array.from({ length: 40 }, (_, i) => ({ name: 'big.example', type: 1, class: 1, ttl: 60, address: `203.0.113.${i + 1}` }));
+	const { ask } = setup({ recursiveMaxUdp: 512 }, async () => ({ rcode: 0, tc: false, answers: many }));
+	const r = parse((await ask(query('big.example', 1, { edns: 1232 })))!);
+	assert.equal(r.header.tc, 1);
+	assert.equal(r.answers.length, 0);
 });

@@ -33,9 +33,18 @@ The resolver is reachable from the internet, so it guards against being used as 
 | `SSSL_DNS_MAX_UDP`             | `1232`  | Largest UDP answer, whatever EDNS size the client asks for (512 without EDNS). Bigger answers go out empty with TC=1. |
 | `SSSL_DNS_NEGATIVE_TTL`        | `30`    | Seconds an upstream failure (timeout, SERVFAIL) or NXDOMAIN is cached per name and type. `0` disables. |
 | `SSSL_DNS_UPSTREAM_TIMEOUT_MS` | `2000`  | Upstream query timeout; the client then gets SERVFAIL. |
+| `SSSL_DNS_RECURSION`           | `known` | Who may recurse for names that are not OpenPak's: `known` (a source that asked for an OpenPak name within `SSSL_DNS_KNOWN_TTL`, plus loopback), `open` (everyone, the pre-0.6 behaviour) or `off`. Everyone else gets `REFUSED`, which is no bigger than the query. |
+| `SSSL_DNS_KNOWN_TTL`           | `172800`| Seconds a source stays a known console after its last OpenPak-name query (memory only, never logged). |
+| `SSSL_DNS_KNOWN_MAX`           | `100000`| Known sources tracked at once; the oldest is dropped past this. |
+| `SSSL_DNS_RECURSIVE_MAX_UDP`   | `1232`  | Largest UDP answer for a recursed name; lower it to force TC=1 sooner. |
 | `SSSL_DNS_STATS_INTERVAL`      | `3600`  | Seconds between aggregate counter lines in the log (only when something changed); `SIGUSR2` prints one now. `0` disables. No client address is ever logged. |
 
 Rules:
+
+- **Closed resolver.** OpenPak's own names (the signed-ceiling profile plus the explicit map) are answered
+  for anyone. Any other name is recursed only for a *known console*: an address (IPv6: /64) that asked
+  for an OpenPak name, as every console does within seconds of booting. Anyone else gets `REFUSED`
+  with the question echoed, so a spoofed query reflects nothing larger than itself.
 
 - **Rate limit, UDP only.** TCP needs a handshake, so it cannot be spoofed and is not limited. Over the
   limit the resolver follows BIND's response-rate-limiting "slip": dropping makes the resolver

@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Ceiling, CeilingStore, familiesFor, fetchCeilingBytes, filterProfile } from './ceiling';
-import { NegativeCache, RateLimiter, configFromEnv, createHandler, formatStats, newStats, preserveEdnsSize, udpUpstream } from './guard';
+import { KnownSources, NegativeCache, RateLimiter, configFromEnv, createHandler, formatStats, newStats, preserveEdnsSize, udpUpstream } from './guard';
 
 process.on('SIGTERM', () => {
 	process.exit();
@@ -240,6 +240,7 @@ const guardConfig = configFromEnv(process.env);
 preserveEdnsSize(Packet as never);
 const limiter = new RateLimiter(guardConfig);
 const stats = newStats();
+const known = new KnownSources(guardConfig.knownTtl, guardConfig.knownMax);
 const handle = createHandler({
 	Packet: Packet as never,
 	config: guardConfig,
@@ -247,11 +248,13 @@ const handle = createHandler({
 	upstream: udpUpstream(Packet as never, process.env.SSSL_DNS_UPSTREAM || '1.1.1.1', 53, guardConfig.upstreamTimeoutMs),
 	limiter,
 	negative: new NegativeCache(guardConfig.negativeTtl),
+	known,
 	stats,
 	log: console.log
 });
 
 setInterval(() => limiter.sweep(), 60_000).unref();
+setInterval(() => known.sweep(), 600_000).unref();
 
 // Aggregate counters only: no client address is ever logged.
 let lastStats = '';

@@ -3,6 +3,14 @@
 Generated from git history on 2026-09-15. `git log` stays the source
 of truth; this file is the readable summary.
 
+## v0.6.0 — 2026-11-04
+
+- **No longer an open resolver.** OpenPak's own names are answered for anyone; every other name is
+  recursed only for a known console (a source that asked for an OpenPak name in the last 48 h; kept
+  in memory, never logged). Everyone else gets `REFUSED` (same size as the query, amplification 1).
+  `SSSL_DNS_RECURSION=known|open|off`, `SSSL_DNS_KNOWN_TTL`, `SSSL_DNS_KNOWN_MAX`,
+  `SSSL_DNS_RECURSIVE_MAX_UDP`. Rate limiting, ANY refusal and the 1232-byte clamp from v0.5.1 stay.
+
 ## v0.5.1 — 2026-11-03
 
 - One log line per DNS query: `dns query <type> -> <rcode> <ms>ms`; never the name or the client

@@ -5,7 +5,7 @@ OpenPak's Console DNS Server.
 | | |
 | --- | --- |
 | Network | Wii U, 3DS, Wii, DS, Switch |
-| Role | DNS server for consoles whose only knob is a DNS setting: answers Nintendo hostnames with the OpenPak box, recurses everything else |
+| Role | DNS server for consoles whose only knob is a DNS setting: answers Nintendo hostnames with the OpenPak box, recurses other names only for consoles that already asked for an OpenPak name (everyone else is refused) |
 | Depends on | OpenPak network profile and signed redirect ceiling on `openpak.org` (compiled-in list if unavailable); upstream resolver `1.1.1.1` by default |
 | Image | `ghcr.io/openpak/nn-sssl-dns` |
 | Based on | [Pretendo `SSSL-DNS`](https://github.com/PretendoNetwork/SSSL-DNS) (AGPL-3.0) |
@@ -17,7 +17,7 @@ OpenPak's Console DNS Server.
 | --- | --- |
 | Nintendo hostnames, `*.openpak.org` | Answered with the OpenPak box |
 | Names named by the network profile | Answered when inside the signed ceiling |
-| Every other name | Recursed to the upstream resolver |
+| Every other name | Recursed to the upstream resolver for known consoles; `REFUSED` for everyone else |
 
 ## Run
 

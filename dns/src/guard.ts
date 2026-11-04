@@ -64,6 +64,10 @@ export interface GuardConfig {
 	upstreamTimeoutMs: number;
 	maxBuckets: number;
 	statsInterval: number; // seconds; 0 disables the periodic line
+	recursion: 'known' | 'open' | 'off'; // who may recurse for names that are not OpenPak's
+	knownTtl: number; // seconds a source stays "known" after it asked for an OpenPak name
+	knownMax: number; // sources tracked at once
+	recursiveMaxUdp: number; // largest UDP answer for a recursed name (bigger: TC=1, retry over TCP)
 }
 
 function envNumber(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
@@ -86,7 +90,11 @@ export function configFromEnv(env: NodeJS.ProcessEnv): GuardConfig {
 		negativeTtl: envNumber(env, 'SSSL_DNS_NEGATIVE_TTL', 30),
 		upstreamTimeoutMs: envNumber(env, 'SSSL_DNS_UPSTREAM_TIMEOUT_MS', 2000),
 		maxBuckets: envNumber(env, 'SSSL_DNS_MAX_BUCKETS', 100_000),
-		statsInterval: envNumber(env, 'SSSL_DNS_STATS_INTERVAL', 3600)
+		statsInterval: envNumber(env, 'SSSL_DNS_STATS_INTERVAL', 3600),
+		recursion: env.SSSL_DNS_RECURSION === 'open' || env.SSSL_DNS_RECURSION === 'off' ? env.SSSL_DNS_RECURSION : 'known',
+		knownTtl: envNumber(env, 'SSSL_DNS_KNOWN_TTL', 48 * 3600),
+		knownMax: envNumber(env, 'SSSL_DNS_KNOWN_MAX', 100_000),
+		recursiveMaxUdp: Math.max(512, Math.min(4096, envNumber(env, 'SSSL_DNS_RECURSIVE_MAX_UDP', 1232)))
 	};
 }
 
@@ -191,6 +199,73 @@ export class RateLimiter {
 	}
 }
 
+// Known consoles: a source that asked for one of OpenPak's own names (every
+// console does within seconds of booting: conntest, the account host, Live,
+// PSN) may recurse for ordinary internet names. Memory only, never logged or
+// written down; the console re-registers on its next OpenPak query. A source
+// is the exact IPv4 address, or the /64 of an IPv6 address.
+export class KnownSources {
+	private readonly entries = new Map<string, number>();
+	private readonly ttlMs: number;
+	private readonly max: number;
+	private readonly now: () => number;
+
+	constructor(ttlSeconds: number, max = 100_000, now: () => number = Date.now) {
+		this.ttlMs = ttlSeconds * 1000;
+		this.max = max;
+		this.now = now;
+	}
+
+	get size(): number {
+		return this.entries.size;
+	}
+
+	private static key(address: string): string {
+		return prefixKey(address, 32, 64);
+	}
+
+	static isLoopback(address: string): boolean {
+		return address === '::1' || address.startsWith('127.') || address.startsWith('::ffff:127.');
+	}
+
+	add(address: string): void {
+		const key = KnownSources.key(address);
+		if (!this.entries.has(key) && this.entries.size >= this.max) {
+			const oldest = this.entries.keys().next().value;
+			if (oldest !== undefined) {
+				this.entries.delete(oldest);
+			}
+		}
+		this.entries.delete(key); // re-insert: Map order stays oldest first
+		this.entries.set(key, this.now() + this.ttlMs);
+	}
+
+	has(address: string): boolean {
+		if (KnownSources.isLoopback(address)) {
+			return true;
+		}
+		const key = KnownSources.key(address);
+		const expires = this.entries.get(key);
+		if (expires === undefined) {
+			return false;
+		}
+		if (expires <= this.now()) {
+			this.entries.delete(key);
+			return false;
+		}
+		return true;
+	}
+
+	sweep(): void {
+		const now = this.now();
+		for (const [ key, expires ] of this.entries) {
+			if (expires <= now) {
+				this.entries.delete(key);
+			}
+		}
+	}
+}
+
 export class NegativeCache {
 	private readonly entries = new Map<string, { rcode: number; expires: number }>();
 	private readonly ttlSeconds: number;
@@ -241,6 +316,7 @@ export interface Stats {
 	rateLimitedSlipped: number;
 	refusedType: number;
 	refusedOther: number; // non-IN class, non-QUERY opcode
+	refusedUnknown: number; // recursion asked by a source that is not a known console
 	malformed: number;
 	truncated: number;
 	upstreamFailed: number;
@@ -248,7 +324,7 @@ export interface Stats {
 }
 
 export function newStats(): Stats {
-	return { queries: 0, answeredOurs: 0, recursed: 0, rateLimitedDropped: 0, rateLimitedSlipped: 0, refusedType: 0, refusedOther: 0, malformed: 0, truncated: 0, upstreamFailed: 0, negativeCacheHits: 0 };
+	return { queries: 0, answeredOurs: 0, recursed: 0, rateLimitedDropped: 0, rateLimitedSlipped: 0, refusedType: 0, refusedOther: 0, refusedUnknown: 0, malformed: 0, truncated: 0, upstreamFailed: 0, negativeCacheHits: 0 };
 }
 
 export function formatStats(stats: Stats): string {
@@ -367,6 +443,7 @@ export interface HandlerDeps {
 	upstream: Upstream;
 	limiter: RateLimiter;
 	negative: NegativeCache;
+	known: KnownSources;
 	stats: Stats;
 	// One line per query: type, rcode, duration. Never the name or the client address.
 	log?: (line: string) => void;
@@ -409,7 +486,7 @@ export function createHandler(deps: HandlerDeps): (request: Pkt, send: Send, rin
 }
 
 function createRunner(deps: HandlerDeps): (request: Pkt, send: Send, rinfo: unknown) => Promise<void> {
-	const { Packet, config, ours, upstream, limiter, negative, stats } = deps;
+	const { Packet, config, ours, upstream, limiter, negative, known, stats } = deps;
 	return async (request, send, rinfo) => {
 		stats.queries += 1;
 		const question = request?.questions?.[0];
@@ -455,6 +532,9 @@ function createRunner(deps: HandlerDeps): (request: Pkt, send: Send, rinfo: unkn
 		const address = ours(name);
 		if (address) {
 			stats.answeredOurs += 1;
+			if (peer.address) {
+				known.add(peer.address);
+			}
 			const response = Packet.createResponseFromRequest(request);
 			if (qtype === TYPE_A) {
 				response.answers.push({
@@ -476,6 +556,14 @@ function createRunner(deps: HandlerDeps): (request: Pkt, send: Send, rinfo: unkn
 		}
 		if (REFUSED_TYPES.has(qtype)) {
 			stats.refusedType += 1;
+			send(minimal(Packet, request, RCODE.REFUSED));
+			return;
+		}
+		// Not an OpenPak name: only a console that has asked for one may recurse.
+		// REFUSED echoes the question and is no bigger than the query, so there is
+		// nothing to amplify.
+		if (config.recursion === 'off' || (config.recursion === 'known' && !(peer.address && known.has(peer.address)))) {
+			stats.refusedUnknown += 1;
 			send(minimal(Packet, request, RCODE.REFUSED));
 			return;
 		}
@@ -517,7 +605,7 @@ function createRunner(deps: HandlerDeps): (request: Pkt, send: Send, rinfo: unkn
 				opt.class = config.maxUdp; // what we advertise, never more than the clamp
 				response.additionals = [ opt ];
 			}
-			if (response.toBuffer().length > limit) {
+			if (response.toBuffer().length > Math.min(limit, config.recursiveMaxUdp)) {
 				stats.truncated += 1;
 				response.answers = [];
 				response.header.tc = 1;
